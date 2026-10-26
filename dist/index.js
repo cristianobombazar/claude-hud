@@ -15,6 +15,7 @@ import { readAuthInfo } from "./auth.js";
 import { getCostTotals } from "./daily-cost.js";
 import { getOutputSpeed } from "./speed.js";
 import { resolveUsage, writeExternalUsageSnapshot } from "./external-usage.js";
+import { withOAuthScopedUsage } from "./oauth-usage.js";
 import { setLanguage, t } from "./i18n/index.js";
 const EMPTY_TRANSCRIPT = { tools: [], skills: [], mcpServers: [], mcpErrors: [], agents: [], todos: [] };
 const NO_COUNTS = { claudeMdCount: 0, rulesCount: 0, mcpCount: 0, hooksCount: 0 };
@@ -79,7 +80,9 @@ export async function main() {
         if (display.externalUsageWritePath && stdinUsage) {
             writeExternalUsageSnapshot(config, stdinUsage, now);
         }
-        const usageData = display.showUsage ? resolveUsage(config, stdinUsage, now) : null;
+        const usageData = display.showUsage
+            ? await withOAuthScopedUsage(config, resolveUsage(config, stdinUsage, now), now)
+            : null;
         render({
             stdin,
             transcript,

@@ -1,0 +1,90 @@
+name: Sync upstream
+
+# Merges jarrodwatts/claude-hud main into this fork every day, rebuilds dist/
+# and stamps a fork version (X.Y.Z-fable.N) so /plugin update picks it up.
+# A conflict outside the generated files opens an issue instead of pushing.
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Merge upstream
+        id: merge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/jarrodwatts/claude-hud.git
+          git fetch upstream main
+
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "Already up to date with upstream."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! git merge upstream/main --no-edit -m "chore: merge upstream $(git rev-parse --short upstream/main) [auto]"; then
+            # Generated files and version stamps are rebuilt below; take upstream's.
+            for f in $(git diff --name-only --diff-filter=U); do
+              case "$f" in
+                dist/*|package-lock.json|package.json|.claude-plugin/*) git checkout --theirs -- "$f" && git add -- "$f" ;;
+              esac
+            done
+            if [ -n "$(git diff --name-only --diff-filter=U)" ]; then
+              echo "conflicts=$(git diff --name-only --diff-filter=U | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+              git merge --abort
+              exit 1
+            fi
+            git commit --no-edit
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build and stamp version
+        if: steps.merge.outputs.changed == 'true'
+        run: |
+          npm ci
+          npm run build
+          test -f dist/index.js
+          base=$(node -p "require('./package.json').version")
+          version="${base}-fable.$(git rev-list --count HEAD)"
+          # Edit the one line so the file stays byte-identical to upstream otherwise.
+          sed -i -E "s/^(  \"version\": \")[^\"]+\"/\1${version}\"/" .claude-plugin/plugin.json
+          grep -q "\"version\": \"${version}\"" .claude-plugin/plugin.json
+          git add dist/ .claude-plugin/plugin.json --force
+          git diff --staged --quiet || git commit -m "build: compile dist/ and stamp ${version} [auto]"
+          git push
+
+      - name: Report conflict
+        if: failure() && steps.merge.outputs.conflicts != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CONFLICTS: ${{ steps.merge.outputs.conflicts }}
+        run: |
+          title="Upstream merge conflict"
+          if [ -z "$(gh issue list --state open --search "in:title \"$title\"" --json number -q '.[].number')" ]; then
+            gh issue create --title "$title" --body "Merging \`jarrodwatts/claude-hud\` main conflicts in: ${CONFLICTS}
+
+          Resolve locally: \`git fetch upstream && git merge upstream/main\`, then push."
+          fi
