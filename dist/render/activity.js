@@ -2,7 +2,7 @@ import { effortInfo, formatEffort } from '../effort.js';
 import { t } from '../i18n/index.js';
 import { displayLabel, sanitizeDisplayText } from '../utils/sanitize.js';
 import { truncateString } from '../utils/truncate.js';
-import { cyan, green, label, magenta, yellow } from './colors.js';
+import { cyan, dim, green, label, magenta, yellow } from './colors.js';
 function shortenToolName(rawName, maxLength) {
     const name = sanitizeDisplayText(rawName);
     if (maxLength === 0)
@@ -76,7 +76,24 @@ function shortModel(model) {
     return /^claude-$/i.test(id) ? undefined : cleaned;
 }
 function formatElapsed(agent, now) {
-    const ms = Math.max(0, (agent.endTime?.getTime() ?? now) - agent.startTime.getTime());
+    return formatMs(Math.max(0, (agent.endTime?.getTime() ?? now) - agent.startTime.getTime()));
+}
+/** ` ███░░░ 50% · ~40s · 1/2` after a running agent, as progress-hud reports it; `≈` marks an estimate. */
+function progressSuffix(progress, width, colors) {
+    const fraction = Number.isFinite(progress.fraction) ? Math.min(1, Math.max(0, progress.fraction)) : 0;
+    const cells = Math.max(1, width);
+    const filled = Math.round(fraction * cells);
+    const bar = `${cyan((colors?.barFilled ?? '█').repeat(filled))}${dim((colors?.barEmpty ?? '░').repeat(cells - filled))}`;
+    const percent = `${progress.isEstimate ? '≈' : ''}${Math.floor(fraction * 100)}%`;
+    const eta = progress.etaMs === null || !Number.isFinite(progress.etaMs)
+        ? ''
+        : progress.etaMs <= 0 ? 'almost' : `${progress.isEstimate ? '≈' : '~'}${formatMs(progress.etaMs)}`;
+    const n = Math.max(0, Math.floor(progress.n));
+    const steps = n > 0 ? `${Math.min(n, Math.max(0, Math.floor(progress.doneN)))}/${n}` : '';
+    const rest = [eta, steps].filter(Boolean).join(' · ');
+    return ` ${bar} ${percent}${rest ? label(` · ${rest}`, colors) : ''}`;
+}
+function formatMs(ms) {
     if (ms < 1000)
         return '<1s';
     if (ms < 60_000)
@@ -114,8 +131,11 @@ function agentsLine(f) {
         const effort = display?.showAgentEffort ? effortInfo(agent.effort) : null;
         const badge = [shortModel(agent.model), effort && formatEffort(effort, display?.effortFormat)].filter(Boolean).join(' ');
         const description = clean(agent.description, 40);
+        const progress = display?.showAgentProgress !== false && agent.status === 'running' && agent.progress
+            ? progressSuffix(agent.progress, f.barWidth, colors)
+            : '';
         return `${icon} ${magenta(clean(agent.type, 24) || 'agent')}${badge ? ` ${label(`[${badge}]`, colors)}` : ''}`
-            + `${description ? label(`: ${description}`, colors) : ''} ${label(`(${formatElapsed(agent, f.now)})`, colors)}`;
+            + `${description ? label(`: ${description}`, colors) : ''} ${label(`(${formatElapsed(agent, f.now)})`, colors)}${progress}`;
     }).join('\n');
 }
 /** `▸ Fix the bug (2/5)`, or `✓ All todos complete (5/5)`. */

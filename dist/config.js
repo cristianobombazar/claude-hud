@@ -124,6 +124,7 @@ export const DEFAULT_CONFIG = {
         showEffortLevel: false,
         effortFormat: 'full',
         showAgentEffort: false,
+        showAgentProgress: true,
         showMemoryUsage: false,
         showPromptCache: false,
         showCacheHitRate: false,

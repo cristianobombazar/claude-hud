@@ -1,10 +1,11 @@
-import type { AgentEntry } from '../types.js';
+import type { AgentEntry, AgentProgress } from '../types.js';
+import type { HudColorOverrides } from '../config.js';
 import { effortInfo, formatEffort } from '../effort.js';
 import { t } from '../i18n/index.js';
 import { displayLabel, sanitizeDisplayText } from '../utils/sanitize.js';
 import { truncateString } from '../utils/truncate.js';
 import type { Frame } from './frame.js';
-import { cyan, green, label, magenta, yellow } from './colors.js';
+import { cyan, dim, green, label, magenta, yellow } from './colors.js';
 
 export type ActivityElement = 'tools' | 'skills' | 'mcp' | 'agents' | 'todos';
 
@@ -81,7 +82,26 @@ function shortModel(model: string | undefined): string | undefined {
 }
 
 function formatElapsed(agent: AgentEntry, now: number): string {
-  const ms = Math.max(0, (agent.endTime?.getTime() ?? now) - agent.startTime.getTime());
+  return formatMs(Math.max(0, (agent.endTime?.getTime() ?? now) - agent.startTime.getTime()));
+}
+
+/** ` ███░░░ 50% · ~40s · 1/2` after a running agent, as progress-hud reports it; `≈` marks an estimate. */
+function progressSuffix(progress: AgentProgress, width: number, colors?: Partial<HudColorOverrides>): string {
+  const fraction = Number.isFinite(progress.fraction) ? Math.min(1, Math.max(0, progress.fraction)) : 0;
+  const cells = Math.max(1, width);
+  const filled = Math.round(fraction * cells);
+  const bar = `${cyan((colors?.barFilled ?? '█').repeat(filled))}${dim((colors?.barEmpty ?? '░').repeat(cells - filled))}`;
+  const percent = `${progress.isEstimate ? '≈' : ''}${Math.floor(fraction * 100)}%`;
+  const eta = progress.etaMs === null || !Number.isFinite(progress.etaMs)
+    ? ''
+    : progress.etaMs <= 0 ? 'almost' : `${progress.isEstimate ? '≈' : '~'}${formatMs(progress.etaMs)}`;
+  const n = Math.max(0, Math.floor(progress.n));
+  const steps = n > 0 ? `${Math.min(n, Math.max(0, Math.floor(progress.doneN)))}/${n}` : '';
+  const rest = [eta, steps].filter(Boolean).join(' · ');
+  return ` ${bar} ${percent}${rest ? label(` · ${rest}`, colors) : ''}`;
+}
+
+function formatMs(ms: number): string {
   if (ms < 1000) return '<1s';
   if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
   const totalSeconds = Math.floor(ms / 1000);
@@ -118,8 +138,11 @@ function agentsLine(f: Frame): string | null {
     const effort = display?.showAgentEffort ? effortInfo(agent.effort) : null;
     const badge = [shortModel(agent.model), effort && formatEffort(effort, display?.effortFormat)].filter(Boolean).join(' ');
     const description = clean(agent.description, 40);
+    const progress = display?.showAgentProgress !== false && agent.status === 'running' && agent.progress
+      ? progressSuffix(agent.progress, f.barWidth, colors)
+      : '';
     return `${icon} ${magenta(clean(agent.type, 24) || 'agent')}${badge ? ` ${label(`[${badge}]`, colors)}` : ''}`
-      + `${description ? label(`: ${description}`, colors) : ''} ${label(`(${formatElapsed(agent, f.now)})`, colors)}`;
+      + `${description ? label(`: ${description}`, colors) : ''} ${label(`(${formatElapsed(agent, f.now)})`, colors)}${progress}`;
   }).join('\n');
 }
 

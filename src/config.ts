@@ -167,6 +167,7 @@ export interface HudConfig {
     showEffortLevel: boolean;
     effortFormat: EffortFormatMode;
     showAgentEffort: boolean;
+    showAgentProgress: boolean;
     showMemoryUsage: boolean;
     showPromptCache: boolean;
     showCacheHitRate: boolean;
@@ -266,6 +267,7 @@ export const DEFAULT_CONFIG: HudConfig = {
     showEffortLevel: false,
     effortFormat: 'full',
     showAgentEffort: false,
+    showAgentProgress: true,
     showMemoryUsage: false,
     showPromptCache: false,
     showCacheHitRate: false,

@@ -318,6 +318,20 @@ test('agent effort shows next to the model only with showAgentEffort, in effortF
   assert.equal(line({ effort: undefined }, { showAgentEffort: true }), '◐ review (1s)');
 });
 
+test('a running agent shows the progress-hud bar, percent, ETA and steps; a finished one and showAgentProgress false do not', () => {
+  const progress = { fraction: 0.5, isEstimate: false, etaMs: 40 * SECOND, doneN: 1, n: 2, step: 'sum up' };
+  const agent = (fields) => ({ id: 'a', type: 'Explore', description: 'map API', status: 'running', startTime: ago(12 * SECOND), progress, ...fields });
+  const line = (fields, display) => lines(ctx({ transcript: { agents: [agent(fields)] }, config: { display: { showAgents: true, ...display } } }))[2];
+  assert.equal(line({}), '◐ Explore: map API (12s) █████░░░░░ 50% · ~40s · 1/2');
+  assert.equal(line({ progress: { ...progress, fraction: 0.123, isEstimate: true, etaMs: 100 * SECOND, n: 0, doneN: 0 } }),
+    '◐ Explore: map API (12s) █░░░░░░░░░ ≈12% · ≈1m 40s');
+  assert.equal(line({ progress: { ...progress, etaMs: 0 } }), '◐ Explore: map API (12s) █████░░░░░ 50% · almost · 1/2');
+  assert.equal(line({ progress: { ...progress, etaMs: null } }), '◐ Explore: map API (12s) █████░░░░░ 50% · 1/2');
+  assert.equal(line({}, { showAgentProgress: false }), '◐ Explore: map API (12s)');
+  assert.equal(line({ status: 'completed', endTime: ago(SECOND) }), '✓ Explore: map API (11s)');
+  assert.equal(line({ progress: undefined }), '◐ Explore: map API (12s)');
+});
+
 test('todos show the task in progress, or completion once every item is done', () => {
   const config = { display: { showTodos: true } };
   const todos = [{ content: 'Fix the bug', status: 'in_progress' }, { content: 'b', status: 'completed' }, { content: 'c', status: 'pending' }];

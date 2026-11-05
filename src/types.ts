@@ -85,6 +85,20 @@ export interface AgentEntry {
   agentId?: string;
   // Read from that transcript when display.showAgentEffort is on.
   effort?: string;
+  // From the progress-hud mod's file when display.showAgentProgress is on; running agents only.
+  progress?: AgentProgress;
+}
+
+export interface AgentProgress {
+  /** 0–1. */
+  fraction: number;
+  /** True while the % and ETA are borrowed from history or a default. */
+  isEstimate: boolean;
+  /** Milliseconds left now, or null when unknown. */
+  etaMs: number | null;
+  doneN: number;
+  n: number;
+  step: string;
 }
 
 export interface TodoItem {

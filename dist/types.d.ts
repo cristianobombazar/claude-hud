@@ -86,6 +86,18 @@ export interface AgentEntry {
     background?: boolean;
     agentId?: string;
     effort?: string;
+    progress?: AgentProgress;
+}
+export interface AgentProgress {
+    /** 0–1. */
+    fraction: number;
+    /** True while the % and ETA are borrowed from history or a default. */
+    isEstimate: boolean;
+    /** Milliseconds left now, or null when unknown. */
+    etaMs: number | null;
+    doneN: number;
+    n: number;
+    step: string;
 }
 export interface TodoItem {
     content: string;

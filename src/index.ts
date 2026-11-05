@@ -5,6 +5,7 @@ import { getUsageFromStdin, isContextUnreported, readStdin } from "./stdin.js";
 import { addSubagentEfforts, parseTranscript } from "./transcript.js";
 import { render } from "./render/index.js";
 import { shownAgents } from "./render/activity.js";
+import { attachAgentProgress, pruneSharedRuns, readSharedRun } from "./progress-hud.js";
 import { countConfigs, type ConfigCounts } from "./config-reader.js";
 import { getGitStatus, type GitRepoIdentity, type GitStatus } from "./git.js";
 import { getJjStatus, isJjRepo } from "./jj.js";
@@ -76,6 +77,10 @@ export async function main(): Promise<void> {
       const data = await parseTranscript(transcriptPath, os.homedir());
       // Only the agents the line will show, since each lookup opens a file.
       if (display.showAgents && display.showAgentEffort) await addSubagentEfforts(transcriptPath, shownAgents(data.agents, now));
+      if (display.showAgents && display.showAgentProgress && data.agents.some((agent) => agent.status === "running")) {
+        attachAgentProgress(shownAgents(data.agents, now), readSharedRun(os.homedir(), stdin.session_id, now), now);
+        pruneSharedRuns(os.homedir(), now);
+      }
       return data;
     };
     const [transcript, gitStatus, extraLabel, memoryUsage] = await Promise.all([

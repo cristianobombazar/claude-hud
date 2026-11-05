@@ -110,6 +110,7 @@ export interface HudConfig {
         showEffortLevel: boolean;
         effortFormat: EffortFormatMode;
         showAgentEffort: boolean;
+        showAgentProgress: boolean;
         showMemoryUsage: boolean;
         showPromptCache: boolean;
         showCacheHitRate: boolean;
