@@ -4,14 +4,18 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import {
-  loadConfig,
-  getConfigPath,
-  getConfigOverridePath,
+  loadConfig as load,
   mergeConfig,
   DEFAULT_CONFIG,
   DEFAULT_ELEMENT_ORDER,
   DEFAULT_MERGE_GROUPS,
-} from '../dist/config.js';
+} from '../src/config.ts';
+import { claudePaths, logicPaths } from '../collector.mjs';
+
+// collector.mjs names the config files; these tests set CLAUDE_CONFIG_DIR, then load.
+const getConfigPath = () => claudePaths(process.env).configPath;
+const getConfigOverridePath = () => claudePaths(process.env).overridePath;
+const loadConfig = () => load(logicPaths(claudePaths(process.env), null));
 
 function withPath(keyPath, value) {
   const keys = keyPath.split('.');
@@ -35,14 +39,12 @@ function booleanPaths(node, prefix = '') {
 }
 
 async function withConfigDir(fn) {
-  const original = process.env.CLAUDE_CONFIG_DIR;
   const dir = await mkdtemp(path.join(os.tmpdir(), 'claude-hud-config-'));
   process.env.CLAUDE_CONFIG_DIR = dir;
   try {
     return await fn(dir);
   } finally {
-    if (original === undefined) delete process.env.CLAUDE_CONFIG_DIR;
-    else process.env.CLAUDE_CONFIG_DIR = original;
+    delete process.env.CLAUDE_CONFIG_DIR;
     await rm(dir, { recursive: true, force: true });
   }
 }
@@ -94,6 +96,7 @@ test('enum options accept only their listed values', () => {
     'gitStatus.branchOverflow': ['truncate', 'wrap'],
     'display.addedDirsLayout': ['inline', 'line'],
     'display.contextValue': ['percent', 'tokens', 'remaining', 'both'],
+    'display.weeklyCostPeriod': ['quota', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
     'display.usageValue': ['percent', 'remaining'],
     'display.effortFormat': ['full', 'symbol', 'text'],
     'display.modelFormat': ['full', 'compact', 'short'],
@@ -162,20 +165,15 @@ test('display text options are sanitized and capped', () => {
   assert.equal(mergeConfig({ display: { modelOverride: 123 } }).display.modelOverride, '');
 });
 
-test('external usage paths trim, expand ~ and ${VAR} once, and leave unset variables', () => {
+test('external usage paths stay as written, trimmed; collector.mjs expands and resolves them', () => {
   process.env.CLAUDE_HUD_TEST_A = '/opt/claude-hud';
   process.env.CLAUDE_HUD_TEST_B = '${CLAUDE_HUD_TEST_A}';
-  delete process.env.CLAUDE_HUD_TEST_MISSING;
   try {
     const { display } = mergeConfig({
       display: { externalUsagePath: ' ~/usage.json ', externalUsageWritePath: '${CLAUDE_HUD_TEST_A}/${CLAUDE_HUD_TEST_B}' },
     });
-    assert.equal(display.externalUsagePath, path.join(os.homedir(), 'usage.json'));
-    assert.equal(display.externalUsageWritePath, '/opt/claude-hud/${CLAUDE_HUD_TEST_A}');
-    assert.equal(
-      mergeConfig({ display: { externalUsagePath: '${CLAUDE_HUD_TEST_MISSING}/u.json' } }).display.externalUsagePath,
-      '${CLAUDE_HUD_TEST_MISSING}/u.json',
-    );
+    assert.equal(display.externalUsagePath, '~/usage.json');
+    assert.equal(display.externalUsageWritePath, '${CLAUDE_HUD_TEST_A}/${CLAUDE_HUD_TEST_B}');
     assert.equal(mergeConfig({ display: { externalUsagePath: 123 } }).display.externalUsagePath, '');
   } finally {
     delete process.env.CLAUDE_HUD_TEST_A;
@@ -261,14 +259,8 @@ test('config paths follow CLAUDE_CONFIG_DIR, with the override outside plugins/'
     assert.equal(getConfigPath(), path.join(dir, 'plugins', 'claude-hud', 'config.json'));
     assert.equal(getConfigOverridePath(), path.join(dir, 'claude-hud.json'));
   });
-  const original = process.env.CLAUDE_CONFIG_DIR;
-  delete process.env.CLAUDE_CONFIG_DIR;
-  try {
-    assert.equal(getConfigPath(), path.join(os.homedir(), '.claude', 'plugins', 'claude-hud', 'config.json'));
-    assert.equal(getConfigOverridePath(), path.join(os.homedir(), '.claude', 'claude-hud.json'));
-  } finally {
-    if (original !== undefined) process.env.CLAUDE_CONFIG_DIR = original;
-  }
+  assert.equal(getConfigPath(), path.join(os.homedir(), '.claude', 'plugins', 'claude-hud', 'config.json'));
+  assert.equal(getConfigOverridePath(), path.join(os.homedir(), '.claude', 'claude-hud.json'));
 });
 
 test('loadConfig layers claude-hud.json over the shared config', async () => {
@@ -324,7 +316,6 @@ test('loadConfig ignores malformed, unsafe, oversized, and symlinked files', asy
 });
 
 test('loadConfig keeps overrides isolated when config directories share plugins/', async (t) => {
-  const original = process.env.CLAUDE_CONFIG_DIR;
   const root = await mkdtemp(path.join(os.tmpdir(), 'claude-hud-shared-plugins-'));
   try {
     const sharedPlugins = path.join(root, 'shared', 'plugins');
@@ -343,8 +334,7 @@ test('loadConfig keeps overrides isolated when config directories share plugins/
     assert.equal(configs.personal.display.customLine, 'personal');
     assert.equal(configs.personal.lineLayout, 'compact');
   } finally {
-    if (original === undefined) delete process.env.CLAUDE_CONFIG_DIR;
-    else process.env.CLAUDE_CONFIG_DIR = original;
+    delete process.env.CLAUDE_CONFIG_DIR;
     await rm(root, { recursive: true, force: true });
   }
 });

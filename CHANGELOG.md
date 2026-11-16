@@ -4,6 +4,38 @@ All notable changes to Claude HUD will be documented in this file.
 
 ## [Unreleased]
 
+## [0.15.3] - 2026-11-10
+
+### Added
+- `display.weeklyCostPeriod` option. Set it to a weekday such as `"monday"` and `Week $…` counts calendar weeks: it clears at 00:00 local time on that day instead of when the 7-day quota window rolls over, so it also shows with an API key. The `Weekly` usage bar still follows the quota window. `"quota"` by default (#867).
+
+## [0.15.2] - 2026-11-08
+
+### Added
+- `display.authUserFullEmail` option. With `showAuthUser` on, the HUD shows your whole email address instead of the part before `@`. Set `authUserLength` to `0` too, or the address is cut to 8 characters. Off by default (#864).
+
+## [0.15.1] - 2026-11-03
+
+### Fixed
+- A symlink in `rules/` that points outside the folders the HUD may read no longer hides the whole rules count. Only that link is skipped; the other rules are still counted. Thanks to @yx64 (#857).
+- The changed-files line lists files in the order git prints them. This is what 0.15.0 already showed; the code no longer claims to sort newest first (#857).
+
+## [0.15.0] - 2026-11-02
+
+### Security
+- A repository's own git config can no longer run a command when you open Claude Code in it. In 0.14.2 and earlier, a booby-trapped repo could do this through a partial clone's automatic fetch, or through a filter driver whose name git couldn't be told to skip. Git now never reaches the network for the HUD, and the HUD skips git for a repo whose filters it can't switch off. Thanks to @yx64 (GHSA-f7gq-pcm8-rxr4) and @mrthankyou (GHSA-25hg-g83m-4w35) for reporting these privately.
+
+### Changed
+- `/hud` replaces `/claude-hud:setup` and `/claude-hud:configure`. Ask Claude to set the HUD up, show or change a setting (with a preview first), check what's wrong, or prepare a bug report with private details removed.
+- The HUD now runs straight from its TypeScript source and needs Node.js 22.18 or newer. On older Node, the status line shows one line asking you to type `/hud`, which helps you upgrade. Bun can still launch it.
+- The HUD's code runs in a locked-down Node process that can't start other programs or write outside its own folder. One small, separately reviewed file runs git and the other programs the HUD needs.
+- A config value the HUD can't use now shows one line ending in `/hud`, instead of being silently ignored.
+
+## [0.14.2] - 2026-11-02
+
+### Fixed
+- The HUD now finds the plugin when `CLAUDE_CODE_PLUGIN_CACHE_DIR` moves Claude Code's plugin folder. Before, the status line was empty or ran an old install left in the default location. If you set this variable, run `/claude-hud:setup` again once to refresh the launcher it copied (#838).
+
 ## [0.14.1] - 2026-10-31
 
 ### Fixed

@@ -1,4 +1,4 @@
-// Golden cases: each renders `node dist/index.js` end to end. Placeholders
+// Golden cases: each renders `node hud.mjs` end to end. Placeholders
 // <PROJECT>, <TRANSCRIPT>, and <HOME> are filled in by golden.test.js.
 export const NOW_MS = Date.parse('2026-10-01T12:00:00.000Z');
 const NOW = NOW_MS / 1000;
@@ -207,6 +207,8 @@ for (const [name, config] of Object.entries(options)) {
 for (const [name, config] of SINGLE_TOGGLES) add(`toggle/${name}`, { stdin: rich, config });
 add('toggle/showRoutedCost+bedrock', { stdin: stdin.bedrock, config: { display: { showCost: true, showRoutedCost: true } } });
 add('toggle/showCost+bedrock', { stdin: stdin.bedrock, config: { display: { showCost: true } } });
+add('toggle/showWeeklyCost+apiUser', { stdin: stdin.apiUser, config: { display: { showWeeklyCost: true } } });
+add('toggle/weeklyCostPeriod=monday+apiUser', { stdin: stdin.apiUser, config: { display: { showWeeklyCost: true, weeklyCostPeriod: 'monday' } } });
 
 for (const columns of [undefined, 60, 120]) {
   const at = columns ? `@${columns}` : '';

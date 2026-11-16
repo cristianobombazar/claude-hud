@@ -10,13 +10,12 @@ import {
   getCostTotals,
   getDailyCostLedgerPath,
   DAILY_COST_WRITE_THROTTLE_MS,
-} from '../dist/daily-cost.js';
+} from '../src/daily-cost.ts';
 
-const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
-let homeDir;
+let dataDir;
 
 function deps(now) {
-  return { homeDir: () => homeDir, now: () => now };
+  return { dataDir: () => dataDir, now: () => now };
 }
 
 function localDateKey(now) {
@@ -27,7 +26,7 @@ function localDateKey(now) {
 }
 
 function readLedger() {
-  return JSON.parse(fs.readFileSync(getDailyCostLedgerPath(homeDir), 'utf8'));
+  return JSON.parse(fs.readFileSync(getDailyCostLedgerPath(dataDir), 'utf8'));
 }
 
 // Noon local time, so +/- a few hours never crosses a day boundary.
@@ -36,17 +35,11 @@ const NOON = new Date(2026, 6, 15, 12, 0, 0).getTime();
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 beforeEach(async () => {
-  delete process.env.CLAUDE_CONFIG_DIR;
-  homeDir = await mkdtemp(path.join(tmpdir(), 'claude-hud-daily-'));
+  dataDir = await mkdtemp(path.join(tmpdir(), 'claude-hud-daily-'));
 });
 
 afterEach(async () => {
-  if (originalConfigDir === undefined) {
-    delete process.env.CLAUDE_CONFIG_DIR;
-  } else {
-    process.env.CLAUDE_CONFIG_DIR = originalConfigDir;
-  }
-  await rm(homeDir, { recursive: true, force: true });
+  await rm(dataDir, { recursive: true, force: true });
 });
 
 test('returns null when nothing has been recorded', () => {
@@ -103,7 +96,7 @@ test('drops sessions unseen for more than 24 hours', () => {
 });
 
 test('recovers from a corrupt ledger file', () => {
-  const ledgerPath = getDailyCostLedgerPath(homeDir);
+  const ledgerPath = getDailyCostLedgerPath(dataDir);
   fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
   fs.writeFileSync(ledgerPath, 'not json{');
 
@@ -112,7 +105,7 @@ test('recovers from a corrupt ledger file', () => {
 });
 
 test('ignores malformed session entries in the ledger', () => {
-  const ledgerPath = getDailyCostLedgerPath(homeDir);
+  const ledgerPath = getDailyCostLedgerPath(dataDir);
   fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
   fs.writeFileSync(ledgerPath, JSON.stringify({
     date: localDateKey(NOON),
@@ -147,7 +140,7 @@ test('still reports the ledger total when the current payload has no cost', () =
 
 test('persists content changes immediately and throttles ts-only refreshes', () => {
   todayUsd({ session_id: 'a', cost: { total_cost_usd: 1.0 } }, undefined, deps(NOON));
-  const ledgerPath = getDailyCostLedgerPath(homeDir);
+  const ledgerPath = getDailyCostLedgerPath(dataDir);
   const firstMtime = fs.statSync(ledgerPath).mtimeMs;
 
   // Unchanged total within the throttle window: no rewrite.
@@ -205,6 +198,38 @@ test('weekly total stays null until the 7-day reset time is known', () => {
   assert.equal(withWindow.weekUsd, 2.0);
 });
 
+test('a calendar week clears at 00:00 on its weekday, through a daylight-saving change', () => {
+  // New York leaves daylight saving at 2am on Sunday 1 November 2026, so that week runs 169 hours.
+  const savedTz = process.env.TZ;
+  process.env.TZ = 'America/New_York';
+  try {
+    // No sevenDayResetAt, as for an API-key session.
+    const opts = { weeklyCostPeriod: 'sunday' };
+    const at = (day, hour, minute) => deps(new Date(2026, 10, day, hour, minute).getTime());
+    getCostTotals({ session_id: 'a', cost: { total_cost_usd: 1.0 } }, opts, at(1, 0, 30));
+    assert.equal(getCostTotals({ session_id: 'a', cost: { total_cost_usd: 3.0 } }, opts, at(1, 12, 0)).weekUsd, 2.0);
+
+    // Saturday 23:30 is more than 7 * 24 hours after the week began, and still inside it. Session 'a'
+    // has aged out by now, so its spend is carried.
+    assert.equal(getCostTotals({ session_id: 'b', cost: { total_cost_usd: 1.0 } }, opts, at(7, 23, 30)).weekUsd, 2.0);
+
+    // Sunday 00:30 is in the next week.
+    assert.equal(getCostTotals({ session_id: 'b', cost: { total_cost_usd: 2.5 } }, opts, at(8, 0, 30)).weekUsd, 1.5);
+  } finally {
+    if (savedTz === undefined) delete process.env.TZ;
+    else process.env.TZ = savedTz;
+  }
+});
+
+test('a calendar week keeps counting when the quota window rolls over', () => {
+  // The quota window rolls over between the second and third render.
+  const before = { weeklyCostPeriod: 'monday', sevenDayResetAt: new Date(NOON + 2500) };
+  const after = { weeklyCostPeriod: 'monday', sevenDayResetAt: new Date(NOON + 2500 + 7 * DAY_MS) };
+  getCostTotals({ session_id: 'a', cost: { total_cost_usd: 1.0 } }, before, deps(NOON));
+  getCostTotals({ session_id: 'a', cost: { total_cost_usd: 2.0 } }, before, deps(NOON + 1000));
+  assert.equal(getCostTotals({ session_id: 'a', cost: { total_cost_usd: 4.0 } }, after, deps(NOON + 3000)).weekUsd, 3.0);
+});
+
 // Runs getCostTotals in its own process. With `stallMs`, the process pauses right after it
 // reads the ledger, which is how another process gets to commit in the middle of its update.
 const CHILD_SOURCE = `
@@ -229,17 +254,17 @@ if (stallMs > 0) {
 getCostTotals(
   { session_id: process.env.HUD_SESSION, cost: { total_cost_usd: Number(process.env.HUD_COST) } },
   undefined,
-  { homeDir: () => home, now: () => Number(process.env.HUD_NOW) },
+  { dataDir: () => home, now: () => Number(process.env.HUD_NOW) },
 );
 `;
 
 function childProcess(session, cost, nowMs, stallMs = 0) {
-  const modulePath = fileURLToPath(new URL('../dist/daily-cost.js', import.meta.url));
+  const modulePath = fileURLToPath(new URL('../src/daily-cost.ts', import.meta.url));
   return spawn(process.execPath, ['--input-type=module', '-e', CHILD_SOURCE], {
     env: {
       ...process.env,
       HUD_MODULE: pathToFileURL(modulePath).href,
-      HUD_HOME: homeDir,
+      HUD_HOME: dataDir,
       HUD_SESSION: session,
       HUD_COST: String(cost),
       HUD_NOW: String(nowMs),
@@ -280,11 +305,11 @@ test('many processes updating at once all end up in the ledger', async () => {
 
   const sessions = readLedger().sessions;
   for (const [i, id] of ids.entries()) assert.equal(sessions[id]?.baseline, i + 1, id);
-  assert.deepEqual(fs.readdirSync(path.dirname(getDailyCostLedgerPath(homeDir))).sort(), ['daily-cost.json']);
+  assert.deepEqual(fs.readdirSync(path.dirname(getDailyCostLedgerPath(dataDir))).sort(), ['daily-cost.json']);
 });
 
 test('a lock left behind by a crashed process does not block updates', () => {
-  const ledgerPath = getDailyCostLedgerPath(homeDir);
+  const ledgerPath = getDailyCostLedgerPath(dataDir);
   fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
   const lockPath = `${ledgerPath}.lock`;
   fs.writeFileSync(lockPath, '');

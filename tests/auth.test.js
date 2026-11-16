@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
-import { deriveAuthInfo, readAuthInfo, truncateUser, formatAuthSegment } from '../dist/auth.js';
+import { deriveAuthInfo, readAuthInfo as read, truncateUser, formatAuthSegment } from '../src/auth.ts';
+import { claudePaths } from '../collector.mjs';
+
+const readAuthInfo = () => read(claudePaths(process.env).claudeJson);
 
 const MAX_ACCOUNT = {
   oauthAccount: {
@@ -13,14 +16,6 @@ const MAX_ACCOUNT = {
     organizationRateLimitTier: 'default_claude_max_20x',
   },
 };
-
-function restoreEnvVar(name, value) {
-  if (value === undefined) {
-    delete process.env[name];
-  } else {
-    process.env[name] = value;
-  }
-}
 
 test('deriveAuthInfo formats claude_max with rate-limit tier', () => {
   const info = deriveAuthInfo(MAX_ACCOUNT, {});
@@ -59,13 +54,13 @@ test('deriveAuthInfo reports API Key when no oauth account but key exported', ()
 
 test('deriveAuthInfo gives API Key precedence over a stale oauth account', () => {
   const info = deriveAuthInfo(MAX_ACCOUNT, { ANTHROPIC_API_KEY: 'sk-test' });
-  assert.deepEqual(info, { method: 'API Key', user: null });
+  assert.deepEqual(info, { method: 'API Key', user: null, email: null });
 });
 
 test('deriveAuthInfo returns nulls for missing/invalid input', () => {
-  assert.deepEqual(deriveAuthInfo(null, {}), { method: null, user: null });
-  assert.deepEqual(deriveAuthInfo('junk', {}), { method: null, user: null });
-  assert.deepEqual(deriveAuthInfo({ oauthAccount: 42 }, {}), { method: null, user: null });
+  assert.deepEqual(deriveAuthInfo(null, {}), { method: null, user: null, email: null });
+  assert.deepEqual(deriveAuthInfo('junk', {}), { method: null, user: null, email: null });
+  assert.deepEqual(deriveAuthInfo({ oauthAccount: 42 }, {}), { method: null, user: null, email: null });
 });
 
 test('deriveAuthInfo strips ANSI sequences and control characters from values', () => {
@@ -81,42 +76,37 @@ test('deriveAuthInfo strips ANSI sequences and control characters from values', 
 test('readAuthInfo honors CLAUDE_CONFIG_DIR and handles unreadable profiles', async () => {
   const tempDir = await mkdtemp(path.join(tmpdir(), 'claude-hud-auth-test-'));
   const configDir = path.join(tempDir, 'profile');
-  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
-  const originalApiKey = process.env.ANTHROPIC_API_KEY;
 
   try {
-    delete process.env.ANTHROPIC_API_KEY;
     process.env.CLAUDE_CONFIG_DIR = configDir;
     await mkdir(configDir, { recursive: true });
 
-    assert.deepEqual(readAuthInfo(), { method: null, user: null });
+    assert.deepEqual(readAuthInfo(), { method: null, user: null, email: null });
 
     // Claude Code keeps claude.json INSIDE the overridden config directory.
     const jsonPath = path.join(configDir, '.claude.json');
     await writeFile(jsonPath, JSON.stringify(MAX_ACCOUNT), 'utf8');
-    assert.deepEqual(readAuthInfo(), { method: 'Claude Max 20x', user: 'someone.long' });
+    assert.deepEqual(readAuthInfo(), { method: 'Claude Max 20x', user: 'someone.long', email: 'someone.long@example.com' });
 
     await writeFile(jsonPath, '{invalid', 'utf8');
-    assert.deepEqual(readAuthInfo(), { method: null, user: null });
+    assert.deepEqual(readAuthInfo(), { method: null, user: null, email: null });
   } finally {
-    restoreEnvVar('CLAUDE_CONFIG_DIR', originalConfigDir);
-    restoreEnvVar('ANTHROPIC_API_KEY', originalApiKey);
+    delete process.env.CLAUDE_CONFIG_DIR;
+    delete process.env.ANTHROPIC_API_KEY;
     await rm(tempDir, { recursive: true, force: true });
   }
 });
 
 test('readAuthInfo reports an API key without requiring an oauth profile', async () => {
   const tempDir = await mkdtemp(path.join(tmpdir(), 'claude-hud-auth-key-test-'));
-  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
-  const originalApiKey = process.env.ANTHROPIC_API_KEY;
 
   try {
     process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'missing');
     process.env.ANTHROPIC_API_KEY = 'sk-test';
-    assert.deepEqual(readAuthInfo(), { method: 'API Key', user: null });
+    assert.deepEqual(readAuthInfo(), { method: 'API Key', user: null, email: null });
   } finally {
-    restoreEnvVar('CLAUDE_CONFIG_DIR', originalConfigDir);
-    restoreEnvVar('ANTHROPIC_API_KEY', originalApiKey);
+    delete process.env.CLAUDE_CONFIG_DIR;
+    delete process.env.ANTHROPIC_API_KEY;
     await rm(tempDir, { recursive: true, force: true });
   }
 });
@@ -146,6 +136,23 @@ test('formatAuthSegment joins method and truncated user', () => {
   assert.equal(formatAuthSegment(null, { showAuth: true, showAuthUser: true }), null);
 });
 
+test('authUserFullEmail shows the whole email address (#864)', () => {
+  const info = deriveAuthInfo(MAX_ACCOUNT, {});
+  assert.equal(
+    formatAuthSegment(info, { showAuth: true, showAuthUser: true, authUserFullEmail: true, authUserLength: 0 }),
+    'Claude Max 20x · someone.long@example.com',
+  );
+  assert.equal(
+    formatAuthSegment(info, { showAuthUser: true, authUserFullEmail: true, authUserLength: 8 }),
+    'someone.…',
+  );
+  // Without an email there is nothing fuller to show, so the display name stays.
+  const named = deriveAuthInfo({ oauthAccount: { displayName: 'Some One' } }, {});
+  assert.equal(formatAuthSegment(named, { showAuthUser: true, authUserFullEmail: true, authUserLength: 0 }), 'Some One');
+  // Off by default.
+  assert.equal(formatAuthSegment(info, { showAuthUser: true, authUserLength: 0 }), 'someone.long');
+});
+
 // --- derived-auth caching -------------------------------------------------
 // claude.json is the user's entire CLI config and grows with project history.
 // The status line runs on every interaction, so an uncached parse is paid per
@@ -155,12 +162,9 @@ test('formatAuthSegment joins method and truncated user', () => {
 test('readAuthInfo re-parses when claude.json actually changes', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'hud-auth-bust-'));
   const configDir = path.join(dir, '.claude');
-  const original = process.env.CLAUDE_CONFIG_DIR;
-  const originalKey = process.env.ANTHROPIC_API_KEY;
   const fsSync = await import('node:fs');
 
   try {
-    delete process.env.ANTHROPIC_API_KEY;
     process.env.CLAUDE_CONFIG_DIR = configDir;
     fsSync.mkdirSync(configDir, { recursive: true });
     const jsonPath = path.join(configDir, '.claude.json');
@@ -175,8 +179,8 @@ test('readAuthInfo re-parses when claude.json actually changes', async () => {
 
     assert.equal(readAuthInfo().user, 'other', 'a changed file must bust the cache');
   } finally {
-    restoreEnvVar('CLAUDE_CONFIG_DIR', original);
-    restoreEnvVar('ANTHROPIC_API_KEY', originalKey);
+    delete process.env.CLAUDE_CONFIG_DIR;
+    delete process.env.ANTHROPIC_API_KEY;
     await rm(dir, { recursive: true, force: true });
   }
 });
@@ -186,12 +190,9 @@ test('readAuthInfo re-parses when claude.json actually changes', async () => {
 test('readAuthInfo detects same-size rewrites with a restored mtime', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'hud-auth-ctime-'));
   const configDir = path.join(dir, '.claude');
-  const original = process.env.CLAUDE_CONFIG_DIR;
-  const originalKey = process.env.ANTHROPIC_API_KEY;
   const fsSync = await import('node:fs');
 
   try {
-    delete process.env.ANTHROPIC_API_KEY;
     process.env.CLAUDE_CONFIG_DIR = configDir;
     fsSync.mkdirSync(configDir, { recursive: true });
     const jsonPath = path.join(configDir, '.claude.json');
@@ -207,8 +208,8 @@ test('readAuthInfo detects same-size rewrites with a restored mtime', async () =
 
     assert.equal(readAuthInfo().user, 'another.long');
   } finally {
-    restoreEnvVar('CLAUDE_CONFIG_DIR', original);
-    restoreEnvVar('ANTHROPIC_API_KEY', originalKey);
+    delete process.env.CLAUDE_CONFIG_DIR;
+    delete process.env.ANTHROPIC_API_KEY;
     await rm(dir, { recursive: true, force: true });
   }
 });

@@ -4,7 +4,11 @@ import { mkdtemp, rm, writeFile, mkdir, symlink, chmod } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import * as fs from 'node:fs';
-import { countConfigs } from '../dist/config-reader.js';
+import { countConfigs as count } from '../src/config-reader.ts';
+import { claudePaths, logicPaths } from '../collector.mjs';
+
+// collector.mjs names every file logic reads; these tests set HOME and CLAUDE_CONFIG_DIR, then count.
+const countConfigs = (cwd) => count(logicPaths(claudePaths(process.env), { cwd }));
 
 function restoreEnvVar(name, value) {
   if (value === undefined) {
@@ -62,7 +66,6 @@ test('countConfigs uses CLAUDE_CONFIG_DIR and its in-dir .claude.json for user s
   const homeDir = await mkdtemp(path.join(tmpdir(), 'claude-hud-home-'));
   const customConfigDir = path.join(homeDir, '.claude-2');
   const originalHome = process.env.HOME;
-  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
   process.env.HOME = homeDir;
   process.env.CLAUDE_CONFIG_DIR = customConfigDir;
 
@@ -102,7 +105,7 @@ test('countConfigs uses CLAUDE_CONFIG_DIR and its in-dir .claude.json for user s
     assert.equal(counts.hooksCount, 2);
   } finally {
     restoreEnvVar('HOME', originalHome);
-    restoreEnvVar('CLAUDE_CONFIG_DIR', originalConfigDir);
+    delete process.env.CLAUDE_CONFIG_DIR;
     await rm(homeDir, { recursive: true, force: true });
   }
 });
@@ -111,7 +114,6 @@ test('countConfigs still counts project .claude when cwd is home and CLAUDE_CONF
   const homeDir = await mkdtemp(path.join(tmpdir(), 'claude-hud-home-'));
   const customConfigDir = path.join(homeDir, '.claude-2');
   const originalHome = process.env.HOME;
-  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
   process.env.HOME = homeDir;
   process.env.CLAUDE_CONFIG_DIR = customConfigDir;
 
@@ -143,7 +145,7 @@ test('countConfigs still counts project .claude when cwd is home and CLAUDE_CONF
     assert.equal(counts.hooksCount, 2);
   } finally {
     restoreEnvVar('HOME', originalHome);
-    restoreEnvVar('CLAUDE_CONFIG_DIR', originalConfigDir);
+    delete process.env.CLAUDE_CONFIG_DIR;
     await rm(homeDir, { recursive: true, force: true });
   }
 });
